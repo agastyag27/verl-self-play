@@ -105,6 +105,7 @@ class AdvantageEstimator(str, Enum):
     GPG = "gpg"
     RLOO_VECTORIZED = "rloo_vectorized"
     GRPO_VECTORIZED = "grpo_vectorized"
+    GRPO_SELF_PLAY = "grpo_self_play"
 
 
 ADV_ESTIMATOR_REGISTRY: dict[str, Any] = {}
@@ -259,7 +260,17 @@ def compute_gae_advantage_return(
         advantages = verl_F.masked_whiten(advantages, response_mask)
     return advantages, returns
 
-
+@register_adv_est(AdvantageEstimator.GRPO_SELF_PLAY)
+def compute_grpo_outcome_advantage_self_play(
+    token_level_rewards: torch.Tensor,
+    player_signs: torch.Tensor, # 1 for player A, -1 for player B, 0 for prompt
+    index: np.ndarray,
+    epsilon: float = 1e-6,
+    norm_adv_by_std_in_grpo: bool = True,
+    config: Optional[AlgoConfig] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return compute_grpo_outcome_advantage(token_level_rewards, player_signs, index, epsilon, norm_adv_by_std_in_grpo, config)
+    
 # NOTE(sgm): this implementation only consider outcome supervision, where the reward is a scalar.
 @register_adv_est(AdvantageEstimator.GRPO)  # or simply: @register_adv_est("grpo")
 def compute_grpo_outcome_advantage(
