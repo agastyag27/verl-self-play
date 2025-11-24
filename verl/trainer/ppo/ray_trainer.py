@@ -242,7 +242,7 @@ def compute_advantage(
     elif adv_estimator == AdvantageEstimator.GRPO_SELF_PLAY:
         advantages, returns = core_algos.compute_grpo_outcome_advantage_self_play(
             token_level_rewards=data.batch["token_level_rewards"],
-            player_signs=data.batch["player_signs"],
+            player_signs=data.batch["extra_fields"]["player_signs"],
             index=data.non_tensor_batch["uid"],
             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
         )
