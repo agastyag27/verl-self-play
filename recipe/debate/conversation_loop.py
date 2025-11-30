@@ -37,7 +37,7 @@ class DebateAgent(AgentLoopBase):
         self.apply_chat_template_kwargs = self.config.data.get("apply_chat_template_kwargs", {})
 
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
-        debate_topic = kwargs["topics"]
+        debate_topic = kwargs["topic"]
         # "are apples or oranges the superior fruit?"
         position_1 = kwargs["position_1"]
         position_2 = kwargs["position_2"]
@@ -49,7 +49,7 @@ class DebateAgent(AgentLoopBase):
 
         messages = [
             {"role": "system",
-            "content": f"You are a pro debater who must argue for both sides of the following debate: {debate_topic}. Each argument should respond to previous points and further your asigned side's case."}
+            "content": f"You are a pro debater who must argue for both sides of the following debate: {debate_topic}. Each argument should respond to previous points and further your asigned side's case. Keep all arguments concise (max 4 sentences), and make sure you are arguing only for your current assigned side."}
         ]
 
         tasks = []
