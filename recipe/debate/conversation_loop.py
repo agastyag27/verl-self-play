@@ -18,6 +18,7 @@ from re import S
 from typing import Any
 from uuid import uuid4
 import asyncio
+import numpy as np
 
 from verl.experimental.agent_loop.agent_loop import AgentLoopBase, AgentLoopOutput, register
 from verl.utils.profiler import simple_timer
@@ -33,7 +34,6 @@ class DebateAgent(AgentLoopBase):
         super().__init__(*args, **kwargs)
         self.prompt_length = self.config.actor_rollout_ref.rollout.prompt_length
         self.response_length = self.config.actor_rollout_ref.rollout.response_length
-        self.num_turns = self.config.actor_rollout_ref.rollout.num_turns
         self.apply_chat_template_kwargs = self.config.data.get("apply_chat_template_kwargs", {})
 
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
@@ -41,6 +41,7 @@ class DebateAgent(AgentLoopBase):
         # "are apples or oranges the superior fruit?"
         position_1 = kwargs["position_1"]
         position_2 = kwargs["position_2"]
+        num_turns = kwargs["num_turns"] if "num_turns" in kwargs else 2
         # "apples are the superior fruit"
         # dataset should contain both orders
 
@@ -49,7 +50,7 @@ class DebateAgent(AgentLoopBase):
 
         messages = [
             {"role": "system",
-            "content": f"You are a pro debater who must argue for both sides of the following debate: {debate_topic}. Each argument should respond to previous points and further your asigned side's case. Keep all arguments concise (max 4 sentences), and make sure you are arguing only for your current assigned side."}
+            "content": f"You are a pro debater who must argue for both sides of the following debate: {debate_topic}. Each argument should respond to previous points and further your asigned side's case. Keep all arguments concise (max 3 sentences), and make sure you are arguing only for your current assigned side."}
         ]
 
         tasks = []
@@ -86,10 +87,10 @@ class DebateAgent(AgentLoopBase):
         response_logprobs = []
         player_signs = []
 
-        budget_per_turn = (self.response_length - self.num_turns * (len(user_ids[1]) + len(user_ids[0]))) // (2 * self.num_turns)
+        budget_per_turn = (self.response_length - num_turns * (len(user_ids[1]) + len(user_ids[0]))) // (2 * num_turns)
         assert budget_per_turn > 0, f"Budget per turn is {budget_per_turn}, which is not positive"
 
-        for turn in range(2*self.num_turns):
+        for turn in range(2*num_turns):
             cur_ids.extend(user_ids[turn%2])
             player_signs.extend([0]*len(user_ids[turn%2]))
             response_mask.extend([0]*len(user_ids[turn%2]))
@@ -109,13 +110,16 @@ class DebateAgent(AgentLoopBase):
 
         response_ids = cur_ids[len(system_ids):]
 
+        player_signs = np.array(player_signs, dtype=np.int32)
+        player_signs.resize(self.response_length)
+
         output = AgentLoopOutput(
             prompt_ids=system_ids,
             response_ids=response_ids,
             response_mask=response_mask,
             response_logprobs=response_logprobs if response_logprobs else None,
             multi_modal_data={},
-            num_turns=1 + 4 * self.num_turns,
+            num_turns=1 + 4 * num_turns,
             metrics=metrics,
             extra_fields={"player_signs": player_signs}
         )

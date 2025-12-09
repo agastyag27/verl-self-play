@@ -174,6 +174,7 @@ class RLHFDataset(Dataset):
 
     def maybe_filter_out_long_prompts(self, dataframe: datasets.Dataset = None):
         # filter out too long prompts
+        print(f"Initial dataset length: {len(dataframe)}")
         if self.filter_overlong_prompts:
             tokenizer = self.tokenizer
             processor = self.processor
@@ -225,7 +226,7 @@ class RLHFDataset(Dataset):
                             ][0]
                         )
                     except Exception:
-                        print("Error processing one of the samples, skipping...")
+                        print("Error processing one of the samples (with processor), skipping...")
                         traceback.print_exc()
                         return self.max_prompt_length + 1
 
@@ -241,7 +242,7 @@ class RLHFDataset(Dataset):
                             tokenizer.apply_chat_template(doc[prompt_key], add_generation_prompt=True, **apply_kwargs)
                         )
                     except Exception:
-                        print("Error processing one of the samples, skipping...")
+                        print("Error processing one of the samples (without processor), skipping...")
                         traceback.print_exc()
                         return self.max_prompt_length + 1
 

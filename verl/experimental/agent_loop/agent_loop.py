@@ -356,10 +356,21 @@ class AgentLoopWorkerBase:
             batch.meta_info.get("global_steps", -1), index.tolist(), batch.meta_info.get("validate", False)
         )
 
+        # print(f"Input batch: {batch}", flush = True)
+
         tasks = []
         for i in range(len(batch)):
-            kwargs = {k: v[i] for k, v in batch.non_tensor_batch.items()}
-            tasks.append(asyncio.create_task(self._run_agent_loop(sampling_params, trajectory_info[i], **kwargs)))
+            try:
+                kwargs = {k: v[i] for k, v in batch.non_tensor_batch.items()}
+                tasks.append(asyncio.create_task(self._run_agent_loop(sampling_params, trajectory_info[i], **kwargs)))
+            except Exception as e:
+                print(f"Error running agent loop: {e}", flush = True)
+                print(f"Index: {i}", flush = True)
+                keys = list(batch.non_tensor_batch.keys())
+                lens = [len(val) for val in batch.non_tensor_batch.values()]
+                for key, l in zip(keys, lens):
+                    print(f"Key: {key}, Length: {l}", flush = True)
+                raise e
         outputs = await asyncio.gather(*tasks)
 
         output = self._postprocess(outputs)
@@ -513,7 +524,7 @@ class AgentLoopWorkerBase:
                 non_tensor_batch = {
                     **{k: np.array([v]) for k, v in kwargs.items()},
                     "__num_turns__": np.array([output.num_turns]),
-                    "tool_extra_fields": np.array([output.extra_fields], dtype=object),
+                    "extra_fields": np.array([output.extra_fields], dtype=object),
                 }
 
                 data = DataProto(

@@ -60,7 +60,6 @@ from verl.utils.seqlen_balancing import calculate_workload, get_seqlen_balanced_
 from verl.utils.torch_functional import masked_mean
 from verl.utils.tracking import ValidationGenerationsLogger
 
-
 @dataclass
 class ResourcePoolManager:
     """
@@ -242,7 +241,7 @@ def compute_advantage(
     elif adv_estimator == AdvantageEstimator.GRPO_SELF_PLAY:
         advantages, returns = core_algos.compute_grpo_outcome_advantage_self_play(
             token_level_rewards=data.batch["token_level_rewards"],
-            player_signs=data.batch["extra_fields"]["player_signs"],
+            player_signs=data.non_tensor_batch["player_signs"],
             index=data.non_tensor_batch["uid"],
             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
         )
@@ -522,7 +521,8 @@ class RayPPOTrainer:
         reward_model_keys = set({"data_source", "reward_model", "extra_info", "uid"}) & batch.non_tensor_batch.keys()
 
         # pop those keys for generation
-        batch_keys_to_pop = ["input_ids", "attention_mask", "position_ids"]
+        # batch_keys_to_pop = ["input_ids", "attention_mask", "position_ids"]
+        batch_keys_to_pop = []
         non_tensor_batch_keys_to_pop = set(batch.non_tensor_batch.keys()) - reward_model_keys
         gen_batch = batch.pop(
             batch_keys=batch_keys_to_pop,
@@ -552,7 +552,7 @@ class RayPPOTrainer:
 
             if "uid" not in test_batch.non_tensor_batch:
                 test_batch.non_tensor_batch["uid"] = np.array(
-                    [str(uuid.uuid4()) for _ in range(len(test_batch.batch))], dtype=object
+                    [str(uuid.uuid4()) for _ in range(len(test_batch))], dtype=object
                 )
 
             # repeat test batch
@@ -560,9 +560,10 @@ class RayPPOTrainer:
                 repeat_times=self.config.actor_rollout_ref.rollout.val_kwargs.n, interleave=True
             )
 
+            return {}
             # we only do validation on rule-based rm
-            if self.config.reward_model.enable and test_batch[0].non_tensor_batch["reward_model"]["style"] == "model":
-                return {}
+            # if self.config.reward_model.enable and test_batch[0].non_tensor_batch["reward_model"]["style"] == "model":
+            #     return {}
 
             # Store original inputs
             input_ids = test_batch.batch["input_ids"]
@@ -1030,7 +1031,7 @@ class RayPPOTrainer:
 
                 # add uid to batch
                 batch.non_tensor_batch["uid"] = np.array(
-                    [str(uuid.uuid4()) for _ in range(len(batch.batch))], dtype=object
+                    [str(uuid.uuid4()) for _ in range(len(batch))], dtype=object
                 )
 
                 gen_batch = self._get_gen_batch(batch)
@@ -1079,11 +1080,11 @@ class RayPPOTrainer:
                             batch.pop(batch_keys=list(keys_to_pop))
 
                             batch.batch["reward_baselines"] = reward_baseline_tensor
-
                             del rm_scores, gen_baseline_batch, gen_baseline_output
                     # repeat to align with repeated responses in rollout
                     batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
                     batch = batch.union(gen_batch_output)
+                    print(f"Gen batch output: {gen_batch_output.non_tensor_batch.keys()}", flush = True)
 
                     if "response_mask" not in batch.batch.keys():
                         batch.batch["response_mask"] = compute_response_mask(batch)
@@ -1199,6 +1200,7 @@ class RayPPOTrainer:
                             "norm_adv_by_std_in_grpo", True
                         )  # GRPO adv normalization factor
 
+                        print(f"Batch: {batch.non_tensor_batch.keys()}", flush = True)
                         batch = compute_advantage(
                             batch,
                             adv_estimator=self.config.algorithm.adv_estimator,

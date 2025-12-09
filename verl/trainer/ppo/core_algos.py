@@ -269,6 +269,7 @@ def compute_grpo_outcome_advantage_self_play(
     norm_adv_by_std_in_grpo: bool = True,
     config: Optional[AlgoConfig] = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    player_signs = torch.as_tensor(player_signs.tolist(), dtype=torch.int32)
     return compute_grpo_outcome_advantage(token_level_rewards, player_signs, index, epsilon, norm_adv_by_std_in_grpo, config)
     
 # NOTE(sgm): this implementation only consider outcome supervision, where the reward is a scalar.

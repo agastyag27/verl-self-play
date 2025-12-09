@@ -107,6 +107,13 @@ def unpad_dataproto(data: "DataProto", pad_size):
 
 def union_tensor_dict(tensor_dict1: TensorDict, tensor_dict2: TensorDict) -> TensorDict:
     """Union two tensordicts."""
+    if tensor_dict1 is None:
+        if tensor_dict2 is None:
+            return TensorDict({}, batch_size=[])
+        else:
+            return tensor_dict2
+    elif tensor_dict2 is None:
+        return tensor_dict1
     assert tensor_dict1.batch_size == tensor_dict2.batch_size, (
         f"Two tensor dict must have identical batch size. Got {tensor_dict1.batch_size} and {tensor_dict2.batch_size}"
     )
@@ -343,11 +350,12 @@ class DataProto:
         self.check_consistency()
 
     def __len__(self):
-        if self.batch is not None:
+        batch_is_none = self.batch is None or len(self.batch) == 0
+        if not batch_is_none:
             return self.batch.batch_size[0]
         elif self.non_tensor_batch is not None and len(self.non_tensor_batch) > 0:
             random_key = list(self.non_tensor_batch.keys())[0]
-            return self.non_tensor_batch[random_key].shape[0]
+            return len(self.non_tensor_batch[random_key])
         else:
             return 0
 
@@ -375,9 +383,11 @@ class DataProto:
         elif isinstance(item, list | np.ndarray | torch.Tensor):
             return self.select_idxs(item)
 
+
         # Case 3: Single integer - return DataProtoItem for backward compatibility
         elif isinstance(item, int | np.integer):
-            tensor_data = self.batch[item] if self.batch is not None else None
+            batch_is_none = self.batch is None or len(self.batch) == 0
+            tensor_data = self.batch[item] if not batch_is_none else None
             non_tensor_data = {key: val[item] for key, val in self.non_tensor_batch.items()}
             return DataProtoItem(batch=tensor_data, non_tensor_batch=non_tensor_data, meta_info=self.meta_info)
 
@@ -386,13 +396,14 @@ class DataProto:
             raise TypeError(f"Indexing with {type(item)} is not supported")
 
     def __getstate__(self):
-        if version.parse(tensordict.__version__) >= version.parse("0.5.0") and self.batch is not None:
+        batch_is_none = self.batch is None or len(self.batch) == 0
+        if version.parse(tensordict.__version__) >= version.parse("0.5.0") and not batch_is_none:
             batch = self.batch.contiguous().consolidate()
         else:
             batch = self.batch
 
         if os.getenv("VERL_DATAPROTO_SERIALIZATION_METHOD") == "numpy":
-            if batch is not None:
+            if not batch_is_none:
                 batch = serialize_tensordict(self.batch)
 
             return (
@@ -442,7 +453,8 @@ class DataProto:
 
     def print_size(self, prefix=""):
         size_of_tensordict = 0
-        if self.batch is not None:
+        batch_is_none = self.batch is None or len(self.batch) == 0
+        if not batch_is_none:
             for _, tensor in self.batch.items():
                 size_of_tensordict += tensor.element_size() * tensor.numel()
         size_of_numpy_array = 0
@@ -462,14 +474,15 @@ class DataProto:
         """Check the consistency of the DataProto. Mainly for batch and non_tensor_batch
         We expose this function as a public one so that user can call themselves directly
         """
-        if self.batch is not None:
+        batch_is_none = self.batch is None or len(self.batch) == 0
+        if not batch_is_none:
             assert len(self.batch.batch_size) == 1, "only support num_batch_dims=1"
 
         if self.non_tensor_batch is not None:
             for key, val in self.non_tensor_batch.items():
                 assert isinstance(val, np.ndarray)
 
-        if self.batch is not None and self.non_tensor_batch is not None and len(self.non_tensor_batch) != 0:
+        if not batch_is_none and self.non_tensor_batch is not None and len(self.non_tensor_batch) != 0:
             # TODO: we can actually lift this restriction if needed
             assert len(self.batch.batch_size) == 1, "only support num_batch_dims=1 when non_tensor_batch is not empty."
 
@@ -544,7 +557,7 @@ class DataProto:
             if not isinstance(val, np.ndarray):
                 non_tensors[key] = np.array(val, dtype=object)
 
-        tensor_dict = TensorDict(source=tensors, batch_size=batch_size) if tensors else None
+        tensor_dict = TensorDict(source=tensors, batch_size=batch_size) #if tensors else None
         if auto_padding:
             meta_info[DataProtoConfig.auto_padding_key] = True
         return cls(batch=tensor_dict, non_tensor_batch=non_tensors, meta_info=meta_info)
@@ -600,7 +613,8 @@ class DataProto:
             DataProto: the current DataProto
 
         """
-        if self.batch is not None:
+        batch_is_none = self.batch is None or len(self.batch) == 0
+        if not batch_is_none:
             self.batch = self.batch.to(device)
         return self
 
@@ -663,7 +677,8 @@ class DataProto:
 
         batch_size = int(idxs_np.sum()) if idxs_np.dtype == bool else idxs_np.shape[0]
 
-        if self.batch is not None:
+        batch_is_none = self.batch is None or len(self.batch) == 0
+        if not batch_is_none:
             # Use TensorDict's built-in indexing capabilities
             selected_batch = TensorDict(
                 source={key: tensor[idxs_torch] for key, tensor in self.batch.items()},
@@ -711,7 +726,8 @@ class DataProto:
         slice_obj = slice(start, end, step)
 
         # Handle the batch data
-        if self.batch is not None:
+        batch_is_none = self.batch is None or len(self.batch) == 0
+        if not batch_is_none:
             # Use TensorDict's built-in slicing capabilities
             sliced_batch = self.batch[slice_obj]
         else:
@@ -883,7 +899,8 @@ class DataProto:
             )
 
         bsz_in_batch = None
-        if self.batch is not None:
+        batch_is_none = self.batch is None or len(self.batch) == 0
+        if not batch_is_none:
             batch_lst = self.batch.chunk(chunks=chunks, dim=0)
             bsz_in_batch = np.array([batch.batch_size[0] for batch in batch_lst])
             chunk_indices = np.cumsum(bsz_in_batch)[:-1]
@@ -986,7 +1003,8 @@ class DataProto:
         Returns:
             DataProto: A new DataProto with repeated data.
         """
-        if self.batch is not None:
+        batch_is_none = self.batch is None or len(self.batch) == 0
+        if not batch_is_none:
             if interleave:
                 # Interleave the data
                 repeated_tensors = {
@@ -1025,7 +1043,8 @@ class DataProto:
         keys not in split_keys are repeated to match the shape
         Note that if the `split_keys` is not provided, it will repeat all the keys in the second dim.
         """
-        if self.batch is not None:
+        batch_is_none = self.batch is None or len(self.batch) == 0
+        if not batch_is_none:
             unfolded_batch = {}
             for key in self.batch.keys():
                 if key in split_keys if split_keys is not None else False:
@@ -1082,7 +1101,8 @@ class DataProto:
             )
         repeat_times = torch.tensor(repeat_times)
 
-        if self.batch is not None:
+        batch_is_none = self.batch is None or len(self.batch) == 0
+        if not batch_is_none:
             # Interleave the data
             repeated_tensors = {
                 key: tensor.repeat_interleave(repeat_times, dim=0) for key, tensor in self.batch.items()

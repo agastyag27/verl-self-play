@@ -102,7 +102,8 @@ def index_select_tensor_dict(batch: TensorDict, indices: torch.Tensor | list[int
     data_dict = {}
     batch_size = indices.shape[0]
 
-    if batch is not None:
+    batch_is_none = batch is None or len(batch) == 0
+    if not batch_is_none:
         for key, tensor in batch.items():
             if isinstance(tensor, torch.Tensor) and not tensor.is_nested:
                 data_dict[key] = tensor[indices]

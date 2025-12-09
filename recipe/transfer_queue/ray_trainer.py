@@ -698,6 +698,7 @@ class RayPPOTrainer:
         return gen_batch
 
     def _validate(self):
+        return {}
         data_source_lst = []
         reward_extra_infos_dict: dict[str, list] = defaultdict(list)
 
@@ -711,8 +712,9 @@ class RayPPOTrainer:
 
         for test_data in self.val_dataloader:
             if "uid" not in test_data.keys():
+                key = list(test_data.keys())[0]
                 test_data["uid"] = np.array(
-                    [str(uuid.uuid4()) for _ in range(len(test_data["input_ids"]))], dtype=object
+                    [str(uuid.uuid4()) for _ in range(len(test_data[key]))], dtype=object
                 )
 
             # repeat test data
@@ -1325,8 +1327,9 @@ class RayPPOTrainer:
                     )
 
                 # add uid to batch
+                key = list(batch_dict.keys())[0]
                 batch_dict["uid"] = np.array(
-                    [str(uuid.uuid4()) for _ in range(len(batch_dict["input_ids"]))], dtype=object
+                    [str(uuid.uuid4()) for _ in range(len(batch_dict[key]))], dtype=object
                 )
                 # When n > 1, repeat input data before putting to data system, simulating DataProto repeat.
                 repeated_batch_dict = self.repeat_dict(

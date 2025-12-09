@@ -49,8 +49,32 @@ data = [
         "topic": "does increasing the number of countries with nuclear weapons make the world safer?",
         "position_1": "increasing the number of countries with nuclear weapons makes the world safer",
         "position_2": "increasing the number of countries with nuclear weapons makes the world more dangerous",
+    },
+    {
+        "topic": "are school vouchers good for education?",
+        "position_1": "school vouchers are good for education",
+        "position_2": "school vouchers are bad for education",
+    },
+    {
+        "topic": "is social media good for society?",
+        "position_1": "social media is good for society",
+        "position_2": "social media is bad for society",
     }
 ]
+
+# flip positions for more data
+extra_data = [
+    {"topic": d["topic"], "position_1": d["position_2"], "position_2": d["position_1"]} for d in data
+]
+
+data.extend(extra_data)
+
+def add_field(data, field, value):
+    for d in data:
+        d[field] = value
+
+add_field(data, "agent_name", "debate_agent")
+add_field(data, "data_source", "debate_topics")
 
 dataset = datasets.Dataset.from_list(data)
 dataset.to_parquet("./train.parquet")

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import inspect
-
+import math
 from verl import DataProto
 from verl.experimental.reward.reward_loop import register
 from verl.experimental.reward.reward_loop.base import RewardLoopManagerBase
@@ -29,21 +29,23 @@ from transformers import PreTrainedTokenizer
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
-# without messing with the backend, we can't get more than top log prob
-
 JUDGE_SAMPLING_PARAMS = {
-    "max_tokens": 10,
-    "return_logprobs": True, # guarantee to get 1, 2
+    "max_tokens": 5,       # Scan first 5 tokens for a valid answer
     "skip_special_tokens": True,
 }
 
-LOG2 = 0.69314718056
+OTHER_PARAMS = {
+    "top_logprobs_num": 20,        # Get top-20 candidates to find "1" and "2"
+    "return_logprob": True, 
+}
 
 async def generate_aiohttp(router_address: str, prompt_ids: list[int], sampling_params: dict):
     payload = {
         "input_ids": prompt_ids,
         "sampling_params": sampling_params,
+        **OTHER_PARAMS,
     }
+    # print(f"Payload: {payload}")
     url = f"http://{router_address}/generate"
     try:
         session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None))
@@ -58,6 +60,8 @@ async def generate_aiohttp(router_address: str, prompt_ids: list[int], sampling_
     finally:
         await session.close()
 
+# Define variants (e.g. "1", " 1", "2", " 2")
+TARGET_MAP = {"1": 1, " 1": 1, "2": 2, " 2": 2}
 
 async def compute_score_debate(
     data_source: str,
@@ -70,6 +74,37 @@ async def compute_score_debate(
 ) -> dict:
     """Compute the reward score for Debate."""
     loop = asyncio.get_running_loop()
+
+    # --- 1. PRE-COMPUTE TOKEN IDs ---
+    # We cannot rely on text matching because SGLang returns None for text.
+    # We must match against the integer Token IDs.
+    
+    # We define the strings we want to look for
+    target_strings = {
+        "1": 1, 
+        " 1": 1, 
+        "2": 2, 
+        " 2": 2
+    }
+    
+    # Convert string keys to integer IDs using the tokenizer
+    # map: {15: 1, 220: 2, ...} (Example IDs)
+    target_token_map = {}
+    
+    for text, value in target_strings.items():
+        # encode(add_special_tokens=False) ensures we get just the raw ID 
+        # without <|im_start|> etc.
+        try:
+            ids = reward_model_tokenizer.encode(text, add_special_tokens=False)
+            if ids:
+                # We take the last ID if it produces multiple (e.g. " 1" -> [" ", "1"])
+                # usually for digits it's a single token.
+                target_id = ids[-1]
+                target_token_map[target_id] = value
+        except Exception as e:
+            logger.warning(f"Failed to encode target token '{text}': {e}")
+
+    # --------------------------------
 
     debate_strs = []
     for i, argument_str in enumerate(argument_strs):
@@ -89,87 +124,67 @@ async def compute_score_debate(
             add_generation_prompt=True,
         ),
     )
+    
+    # ... (Network call remains the same) ...
     judge_outputs = await generate_aiohttp(
         router_address=reward_router_address,
         prompt_ids=judge_ids,
         sampling_params=JUDGE_SAMPLING_PARAMS,
     )
-    judge_response_ids = judge_outputs.get("output_ids", None)
-    judge_response = await loop.run_in_executor(
-        None, lambda: reward_model_tokenizer.decode(judge_response_ids, skip_special_tokens=True)
-    )
-    # assume that the logprobs of everything other than 1 / 2 is basically 0
-    reward_score = 0.0
-    judge_succesful = False
-    for i, char in enumerate(judge_response):
-        if char in "12":
-            lp_diff = judge_outputs.log_probs[i] - LOG2
-            reward_score = lp_diff if char == '1' else -lp_diff
-            judge_succesful = True
-            break
 
-    return {"score": reward_score, "judge_succesful": judge_succesful}
+    # Use 'output_top_logprobs' as seen in your logs
+    meta_info = judge_outputs.get("meta_info", {})
+    all_steps_logprobs = meta_info.get("output_top_logprobs", [])
 
+    if not all_steps_logprobs:
+        # print(f"Judge outputs: {judge_outputs}") # Optional debug
+        logger.error("No logprobs returned from SGLang")
+        return {"score": 0.0, "judge_succesful": False}
 
-@register("debate_reward_loop_manager")
-class DebateRewardLoopManager(RewardLoopManagerBase):
-    def __init__(self, config, tokenizer, compute_score=None, reward_router_address=None, reward_model_tokenizer=None):
-        super().__init__(config, tokenizer)
-        self.compute_score = compute_score or default_compute_score
-        self.is_async_reward_score = inspect.iscoroutinefunction(self.compute_score)
-        self.reward_router_address = reward_router_address
-        self.reward_model_tokenizer = reward_model_tokenizer
+    # --- SCORE CALCULATION ---
+    prob_1 = 0.0
+    prob_2 = 0.0
+    found_any = False
 
-    async def run_single(self, data: DataProto) -> dict:
-        assert len(data) == 1, "Only support single data item"
-        data_item = data[0]
-        response_ids = data_item.batch["responses"]
-        response_length = response_ids.shape[-1]
-        valid_response_length = data_item.batch["attention_mask"][-response_length:].sum()
-        valid_response_ids = response_ids[:valid_response_length]
+    # Scan the first few generated steps
+    for step_logprobs in all_steps_logprobs[:10]: 
+        step_p1 = 0.0
+        step_p2 = 0.0
+        step_has_target = False
+        
+        # logprob structure: [logprob_float, token_id_int, token_text_str_or_None]
+        for logprob, token_id, _ in step_logprobs:
+            
+            # --- FIX: Match by ID, not Text ---
+            val = target_token_map.get(token_id, None)
+            
+            if val == 1:
+                step_p1 += math.exp(logprob)
+                step_has_target = True
+            elif val == 2:
+                step_p2 += math.exp(logprob)
+                step_has_target = True
+        
+        # If we found relevant tokens in this step, use them and STOP scanning.
+        if step_has_target:
+            prob_1 = step_p1
+            prob_2 = step_p2
+            found_any = True
+            break 
+    
+    if not found_any:
+        return {"score": 0.0, "judge_succesful": False}
 
-        data_source = data_item.non_tensor_batch["data_source"]
-        player_signs = data_item.non_tensor_batch["extra_info"]["player_signs"][:valid_response_length]
-        tsigns = torch.as_tensor([0]+player_signs+[0])
-        diffs = tsigns[1:] - tsigns[:-1]
-        # diffs = 1 implies player A start or B end, diffs = -1 => player B start or end
-        change_pos = torch.nonzero(diffs, as_tuple=False).flatten()
-        start_pos = change_pos[::2]
-        end_pos = change_pos[1::2]
+    # SAFETY: Add epsilon to prevent log(0) or division by zero
+    epsilon = 1e-9
+    safe_p1 = prob_1 + epsilon
+    safe_p2 = prob_2 + epsilon
 
-        debate_topic = data_item.non_tensor_batch["topic"]
-        # "are apples or oranges the superior fruit?"
-        position_1 = data_item.non_tensor_batch["position_1"]
-        position_2 = data_item.non_tensor_batch["position_2"]
+    # FORMULA: log(p1 / p2)
+    raw_score = math.log(safe_p1 / safe_p2)
 
-        argument_ids = []
-        for start, end in zip(start_pos, end_pos):
-            argument_ids.append(valid_response_ids[start:end])
+    # SAFETY: Clip the reward
+    CLIP_VAL = 10.0
+    reward_score = max(min(raw_score, CLIP_VAL), -CLIP_VAL)
 
-        argument_strs = await self.loop.run_in_executor(
-            None, lambda: self.tokenizer.batch_decode(argument_ids, skip_special_tokens=True)
-        )
-        result = await self.compute_score(
-            data_source=data_source,
-            argument_strs=argument_strs,
-            topic=debate_topic,
-            position_1=position_1,
-            position_2=position_2,
-            reward_router_address=self.reward_router_address,
-            reward_model_tokenizer=self.reward_model_tokenizer,
-        )
-
-        reward_extra_info = {}
-
-        score: float
-        if isinstance(result, dict):
-            score = result["score"]
-            for key, value in result.items():
-                reward_extra_info[key] = value
-        else:
-            score = result
-            reward_extra_info["acc"] = score
-
-        reward = score
-
-        return {"reward_score": reward, "reward_extra_info": reward_extra_info}
+    return {"score": reward_score, "judge_succesful": True}
